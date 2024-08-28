@@ -9,13 +9,13 @@ def prepare_adult(protected_groups, partial):
     X = adult.data.features.copy()
     y = adult.data.targets.copy()
 
-    # 1 quer dizer que pertence ao grupo protegido
-    # 0 quer dizer que pertence ao grupo privilegiado
+    # 0 quer dizer que pertence ao grupo protegido
+    # 1 quer dizer que pertence ao grupo privilegiado
     for k,v in protected_groups.items():
         if pd.api.types.is_string_dtype(X[k]):
-            X[k] = X[k].apply(lambda x: 1 if x == v else 0)
+            X[k] = X[k].apply(lambda x: 0 if x == v else 1)
         elif pd.api.types.is_numeric_dtype(X[k]):
-            X[k] = X[k].apply(lambda x: 1 if x > v else 0)
+            X[k] = X[k].apply(lambda x: 0 if x > v else 1)
 
     label_enc = LabelEncoder()
     for col in X.select_dtypes(include=['object']).columns:

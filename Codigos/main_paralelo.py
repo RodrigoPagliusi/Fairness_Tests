@@ -225,11 +225,12 @@ def run(folder, datafile, metric, sensitive_name, label, random=None):
     print("DIFFERENCE EXTATREE:", unfair_et - fitness_function.inital_et)
     return population, labels, group
 
-def flip_labels(dataframe,sensitive_name,label,threshold):
-    condition = ((dataframe[sensitive_name] == 1) & (dataframe[label] == 1)) | ((dataframe[sensitive_name] == 0) & (dataframe[label] == 0))
-    random_numbers = np.random.rand(len(dataframe.loc[condition,label]))
+def flip_labels(folder,datafile,sensitive_name,label_name,threshold):
+    dataframe = pd.read_csv(folder + datafile)
+    condition = ((dataframe[sensitive_name] == 1) & (dataframe[label_name] == 1)) | ((dataframe[sensitive_name] == 0) & (dataframe[label_name] == 0))
+    random_numbers = np.random.rand(len(dataframe.loc[condition,label_name]))
     mask = random_numbers < threshold
-    dataframe.loc[condition,label] = dataframe.loc[condition,label].where(~mask, 1 - dataframe.loc[condition,label])
+    dataframe.loc[condition,label_name] = dataframe.loc[condition,label_name].where(~mask, 1 - dataframe.loc[condition,label_name])
     return dataframe
 
 if __name__ == '__main__':
@@ -295,38 +296,44 @@ if __name__ == '__main__':
     label_name = args.label_name
     sensitive_name = args.sensitive_name
     protected_value = args.protected_value
-
+    threshold = args.threshold
+    num_rows = args.num_rows
+    num_datasets = args.num_datasets
+    sequential = args.sequential
+    generate_reference = args.generate_reference
+    unfair_metric = args.unfair_metric
     datafile = args.dataset
+
+    # TEMPORARY
+    # num_rows = 100
+
     available_datasets = ['encoded_adult.csv']
     if not datafile in available_datasets: sys.exit("Dataset inválido")
 
     folder = "./datasets/"
     if not os.path.exists(folder): os.makedirs(folder)
 
-    save_adult(folder, datafile, sensitive_name, protected_value, args.num_rows)
+    save_adult(folder, datafile, sensitive_name, protected_value, num_rows)
 
-    if args.num_rows: datafile = str(args.num_rows) + "_" + datafile
+    if num_rows: datafile = str(num_rows) + "_" + datafile
 
-    if args.generate_reference:
+    if generate_reference:
         print("Generating a reference dataset.")
         simulate_dataset(folder, sensitive_name, label_name)
     else:
-        u_metric_index = args.unfair_metric - 1
+        u_metric_index = unfair_metric - 1
 
-        for number in range(args.num_datasets):
+        for number in range(num_datasets):
             print(f"\n\nNEW ITERARION - NUMBER_{number}")
             print(
-                datafile,
+                datafile,"|",
                 "Sequential =",
-                str(args.sequential),
+                str(sequential),"|",
                 UNFAIRNESS_METRICS[u_metric_index]
                 )
 
             if u_metric_index == 8:
-                threshold = args.threshold
-                df = pd.read_csv(folder + datafile)
-                df = df.iloc[0:30]
-                population = flip_labels(df,sensitive_name,label_name,threshold)
+                population = flip_labels(folder,datafile,sensitive_name,label_name,threshold)
             else:
                 population, group, labels = run(
                                             folder,
@@ -347,7 +354,7 @@ if __name__ == '__main__':
                 filename = \
                     datafile_name + \
                     '_unfair_' + str(u_metric_index) + \
-                    "_seq_"  + str(args.sequential) + \
+                    "_seq_"  + str(sequential) + \
                     '_set_' + str(number) + \
                     extension
             else:
@@ -358,7 +365,7 @@ if __name__ == '__main__':
 
             population.to_csv(folder + filename, index=False)
 
-            if args.sequential:
+            if sequential:
                 if u_metric_index == 8: threshold += 0.05
                 else: datafile = filename
         # Chamar a função para analisar os datasets

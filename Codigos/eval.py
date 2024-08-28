@@ -1,5 +1,6 @@
 import os
 import glob
+import numpy as np
 import pandas as pd
 from scipy.stats import pearsonr
 from sklearn.linear_model import LogisticRegression
@@ -10,9 +11,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, f1_score, matthews_corrcoef
-from aif360.datasets import BinaryLabelDataset
-from aif360.metrics import ClassificationMetric
-from aif360.metrics import BinaryLabelDatasetMetric
 import matplotlib.pyplot as plt
 from itertools import cycle
 
@@ -37,36 +35,6 @@ from itertools import cycle
 
 # Ver o que acontece no seu main_paralelo.py com e sem random_state=98958
 
-def calculate_statistical_parity(df, group_column, outcome_column):
-    """
-    Calculate statistical parity between privileged and unprivileged groups based on outcome results.
-
-    Parameters:
-    df (pd.DataFrame): The dataframe containing the group and outcome columns.
-    group_column (str): The name of the column representing the privileged (0) and unprivileged (1) groups.
-    outcome_column (str): The name of the column representing the negative (0) and positive (1) outcomes.
-
-    Returns:
-    float: The statistical parity difference between the unprivileged and privileged groups.
-    """
-
-    # Filter privileged and unprivileged groups
-    privileged_group = df[df[group_column] == 0]
-    unprivileged_group = df[df[group_column] == 1]
-
-    # Calculate the rate of positive outcomes for each group
-    privileged_positive_rate = privileged_group[outcome_column].mean()
-    unprivileged_positive_rate = unprivileged_group[outcome_column].mean()
-
-    # Calculate statistical parity difference
-    statistical_parity = unprivileged_positive_rate - privileged_positive_rate
-
-    return statistical_parity
-
-
-
-
-
 def eval_datasets(dataset, label, sensitive, priv, unpriv, unfair_metric, seq):
 
     datasets_path = "././datasets/"
@@ -77,9 +45,6 @@ def eval_datasets(dataset, label, sensitive, priv, unpriv, unfair_metric, seq):
 
     tables = "./tables/"
     if not os.path.exists(tables): os.makedirs(tables)
-
-    unfair_metric -= 1
-    unfair_metric = str(unfair_metric)
 
     file_pattern = dataset + "_unfair_" + unfair_metric + "_seq_" + str(seq) + "_set_*.csv"
     matching_files = glob.glob(os.path.join(datasets_path, file_pattern))
@@ -105,25 +70,17 @@ def eval_datasets(dataset, label, sensitive, priv, unpriv, unfair_metric, seq):
         df = pd.read_csv(file_path)
 
         # Prepare data
-        X = df.drop(columns=[label])
-        y = df[[label]]
-        sensitive_feature = df[[sensitive]]
+        X = df.drop(columns=[label]).copy()
+        y = df[[label]].copy()
+        sensitive_feature = df[[sensitive]].copy()
 
         # Split the dataset into training and testing sets
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-
-        # Create test dataset for AIF360
-        test_dataset = BinaryLabelDataset(df=pd.concat([X_test, y_test], axis=1),
-                                        label_names=[label],
-                                        protected_attribute_names=[sensitive])
-
-        full_dataset = BinaryLabelDataset(
-                        favorable_label=priv,
-                        unfavorable_label=unpriv,
-                        df=df,
-                        label_names=[label],
-                        protected_attribute_names=[sensitive]
-                    )
+        df_X_test_sensitive = X_test[sensitive].copy().to_numpy().astype('int64')
+        X_train = X_train.to_numpy().astype('int64')
+        y_train = y_train.to_numpy().astype('int64').ravel()
+        X_test = X_test.to_numpy().astype('int64')
+        y_test = y_test.to_numpy().astype('int64').ravel()
 
         # Max Pearson's correlation
         # max_corr = max(abs(pearsonr(sensitive_feature, X[col])[0]) for col in X.columns)
@@ -134,19 +91,22 @@ def eval_datasets(dataset, label, sensitive, priv, unpriv, unfair_metric, seq):
         label_counts = {int(k): v for k, v in label_counts.items()}
         sensitive_counts = {int(k): v for k, v in sensitive_counts.items()}
 
-        direct_metric = BinaryLabelDatasetMetric(
-            full_dataset,
-            privileged_groups=[{sensitive: priv}],
-            unprivileged_groups=[{sensitive: unpriv}]
-        )
+        condition = ((df[sensitive] == 0) & (df[label] == 1))
+        positive_priviledged = df.loc[condition,label].copy().shape[0]
+        condition = ((df[sensitive] == 0) & (df[label] == 0))
+        negative_priviledged = df.loc[condition,label].copy().shape[0]
+        condition = ((df[sensitive] == 1) & (df[label] == 1))
+        positive_unpriviledged = df.loc[condition,label].copy().shape[0]
+        condition = ((df[sensitive] == 1) & (df[label] == 0))
+        negative_unpriviledged = df.loc[condition,label].copy().shape[0]
 
+        unprivileged = df[df[sensitive] == 1].copy()
+        p_positive_unprivileged = unprivileged[label].mean()
+        privileged = df[df[sensitive] == 0].copy()
+        p_positive_privileged = privileged[label].mean()
+        statistical_parity = abs(p_positive_unprivileged - p_positive_privileged)
 
-        # Calcular as métricas você mesmo e comparar com o AIF360
-
-        statistical_parity_difference = direct_metric.statistical_parity_difference()
-
-        # Tenho que calcular positivos e negativos de privilegiados e não-privilegiados
-        data_metrics.append({ # Incluir Statistical Parity Aqui
+        data_metrics.append({
             "Dataset": file_name,
             "Number of Features": X.shape[1],
             "Number of Instances": X.shape[0],
@@ -156,44 +116,45 @@ def eval_datasets(dataset, label, sensitive, priv, unpriv, unfair_metric, seq):
             "Label Counts Negative": label_counts[0],
             "Sensitive Attribute Counts Unpriviledged": sensitive_counts[1],
             "Sensitive Attribute Counts Priviledged": sensitive_counts[0],
-            "Positive Priviledged":,
-            "Positive Unpriviledged":,
-            "Negative Priviledged":,
-            "Negative Unpriviledged":,
-            #"Max Pearson's Correlation": max_corr,
-            "Statistical Parity": statistical_parity_difference
+            "Positive Priviledged":positive_priviledged,
+            "Positive Unpriviledged":negative_priviledged,
+            "Negative Priviledged":positive_unpriviledged,
+            "Negative Unpriviledged":negative_unpriviledged,
+            # "Max Pearson's Correlation": max_corr,
+            "Statistical Parity": statistical_parity
         })
 
         for model_name, clf in models.items():
 
-            # Train the model
-            clf.fit(X_train, y_train.values.ravel())
-
-            # Make predictions
+            clf.fit(X_train, y_train)
             y_pred = clf.predict(X_test)
 
-            # Create predicted dataset for AIF360
-            predicted_dataset = test_dataset.copy(deepcopy=True)
-            predicted_dataset.labels = y_pred
-
             # Compute traditional metrics
-            accuracy = accuracy_score(y_test, y_pred)
             # ACHO QUE EU DEVIA FAZER 0 NÃO PRIVILEGIADO E 1 PRIVILEGIADO
+            # COLOQUEI MESMO TIPO DE DADOS PARA y_test e y_pred
+            # CALCULE AS MÉTRICAS DE FAIRNESS VOCÊ MESMO
+            accuracy = accuracy_score(y_test, y_pred)
             f1 = f1_score(y_test, y_pred)
             mcc = matthews_corrcoef(y_test, y_pred)
 
-            # Compute fairness metrics using AIF360
-            metric = ClassificationMetric(
-                test_dataset,
-                predicted_dataset,
-                unprivileged_groups=[{test_dataset.protected_attribute_names[0]: unpriv}],
-                privileged_groups=[{test_dataset.protected_attribute_names[0]: priv}]
-            )
-            stat_parity = abs(metric.statistical_parity_difference())
-            eq_opportunity = abs(metric.equal_opportunity_difference())
-            eq_odds = abs(metric.average_odds_difference())
+            p_positive_unprivileged = np.mean(y_pred[df_X_test_sensitive == 1])
+            p_positive_privileged = np.mean(y_pred[df_X_test_sensitive == 0])
+            stat_parity = abs(p_positive_unprivileged - p_positive_privileged)
 
-            # Append results
+            true_positive_unprivileged = y_pred[(df_X_test_sensitive == 1) & (y_test == 1)]
+            true_positive_privileged = y_pred[(df_X_test_sensitive == 0) & (y_test == 1)]
+            tpr_unprivileged = np.mean(true_positive_unprivileged) if len(true_positive_unprivileged) > 0 else 0
+            tpr_privileged = np.mean(true_positive_privileged) if len(true_positive_privileged) > 0 else 0
+            eq_opportunity = abs(tpr_unprivileged - tpr_privileged)
+
+            false_positive_unprivileged = y_pred[(df_X_test_sensitive == 1) & (y_test == 0)]
+            false_positive_privileged = y_pred[(df_X_test_sensitive == 0) & (y_test == 0)]
+            fpr_unprivileged = np.mean(false_positive_unprivileged) if len(false_positive_unprivileged) > 0 else 0
+            fpr_privileged = np.mean(false_positive_privileged) if len(false_positive_privileged) > 0 else 0
+            fpr_diff = abs(fpr_unprivileged - fpr_privileged)
+
+            eq_odds = np.mean([eq_opportunity,fpr_diff])
+
             results.append({
                 "Dataset": file_name,
                 "Model": model_name,
@@ -205,7 +166,6 @@ def eval_datasets(dataset, label, sensitive, priv, unpriv, unfair_metric, seq):
                 "Equalized Odds": eq_odds,
             })
 
-    # Convert results to a DataFrame and save to excel
     data_metrics = pd.DataFrame(data_metrics)
     data_metrics = data_metrics.set_index("Dataset").T
     data_metrics.columns.name = "Dataset"
@@ -231,12 +191,10 @@ def eval_datasets(dataset, label, sensitive, priv, unpriv, unfair_metric, seq):
     results_fariness = results.iloc[3:]
 
     plt.figure(figsize=(10, 6))
-    colors = cycle(['b', 'g', 'r', 'c', 'm', 'y', 'k'])
-
+    colors = cycle(['b', 'g', 'r'])
     for (metric, model), color in zip(results_performance.index, colors):
         plt.plot(results_performance.columns, results_performance.loc[(metric, model)], marker='o', label=f'{metric}', color=color)
         plt.title(f'Performance Metrics for ' + dataset + "_unfair_" + unfair_metric + "_seq_" + str(seq))
-
     plt.xlabel('Dataset')
     plt.ylabel('Metric Value')
     plt.grid(True)
@@ -248,11 +206,9 @@ def eval_datasets(dataset, label, sensitive, priv, unpriv, unfair_metric, seq):
 
     plt.figure(figsize=(10, 6))
     colors = cycle(['b', 'g', 'r', 'c', 'm', 'y', 'k'])
-
     for (metric, model), color in zip(results_fariness.index, colors):
         plt.plot(results_fariness.columns, results_fariness.loc[(metric, model)], marker='o', label=f'{metric}', color=color)
         plt.title(f'Fairness Metrics for ' + dataset + "_unfair_" + unfair_metric + "_seq_" + str(seq))
-
     plt.xlabel('Dataset')
     plt.ylabel('Metric Value')
     plt.grid(True)
@@ -264,6 +220,10 @@ def eval_datasets(dataset, label, sensitive, priv, unpriv, unfair_metric, seq):
 
     print("All metrics plotted and saved successfully.")
 
+
+
+
 if __name__ == "__main__":
 
-    eval_datasets("encoded_adult", "income", "sex", 0, 1, 9, True)
+    eval_datasets("encoded_adult", "income", "sex", 1, 0, 'flip', False)
+    # def eval_datasets(dataset, label, sensitive, priv, unpriv, unfair_metric, seq):
